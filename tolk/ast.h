@@ -27,35 +27,33 @@
  *   Here we introduce AST representation of Tolk source code.
  *   Historically, in FunC, there was no AST: while lexing, symbols were registered, types were inferred, and so on.
  * There was no way to perform any more or less semantic analysis.
- *   In Tolk, I've implemented parsing .tolk files into AST at first, and then converting this AST
- * into legacy representation (see pipe-ast-to-legacy.cpp).
- *   In the future, more and more code analysis will be moved out of legacy to AST-level.
+ *   In Tolk, all files are parsed into AST, and all semantic analysis is done at the AST level.
  *
  *   From the user's point of view, all AST vertices are constant. All API is based on constancy.
  * Even though fields of vertex structs are public, they can't be modified, since vertices are accepted by const ref.
  *   Generally, there are three ways of accepting a vertex:
  *   * AnyV (= const ASTNodeBase*)
- *     the only you can do with this vertex is to see v->type (ASTNodeType) and to cast via v->as<node_type>()
+ *     the only you can do with this vertex is to see v->kind (ASTNodeKind) and to cast via v->as<node_kind>()
  *   * AnyExprV (= const ASTNodeExpressionBase*)
  *     in contains expression-specific properties (lvalue/rvalue, inferred type)
- *   * V<node_type> (= const Vertex<node_type>*)
+ *   * V<node_kind> (= const Vertex<node_kind>*)
  *     a specific type of vertex, you can use its fields and methods
  *   There is one way of creating a vertex:
- *   * createV<node_type>(...constructor_args)   (= new Vertex<node_type>(...))
+ *   * createV<node_kind>(...constructor_args)   (= new Vertex<node_kind>(...))
  *     vertices are currently created on a heap, without any custom memory arena, just allocated and never deleted
  *   The only way to modify a field is to use "mutate()" method (drops constancy, the only point of mutation)
- *   and then to call "assign_*" method, like "assign_sym", "assign_src_file", etc.
+ * and then to call "assign_*" method, like "assign_sym", "assign_src_file", etc.
  *
- *   Having AnyV and knowing its node_type, a call
- *     v->as<node_type>()
+ *   Having AnyV and knowing its node_kind, a call
+ *     v->as<node_kind>()
  *   will return a typed vertex.
- *   There is also a shorthand v->try_as<node_type>() which returns V<node_type> or nullptr if types don't match:
+ *   There is also a shorthand v->try_as<node_kind>() which returns V<node_kind> or nullptr if types don't match:
  *     if (auto v_int = v->try_as<ast_int_const>())
  *   Note, that there casts are NOT DYNAMIC. ASTNode is not a virtual base, it has no vtable.
  *   So, as<...>() is just a compile-time casting, without any runtime overhead.
  *
  *   Note, that ASTNodeBase doesn't store any vector of children. That's why there is no way to loop over
- * a random (unknown) vertex. Only a concrete Vertex<node_type> stores its children (if any).
+ * a random (unknown) vertex. Only a concrete Vertex<node_kind> stores its children (if any).
  *   Hence, to iterate over a custom vertex (e.g., a function body), one should inherit some kind of ASTVisitor.
  *   Besides read-only visiting, there is a "visit and replace" pattern.
  *   See ast-visitor.h and ast-replacer.h.
@@ -63,13 +61,23 @@
 
 namespace tolk {
 
-enum ASTNodeType {
+enum ASTNodeKind {
   ast_identifier,
+  // types
+  ast_type_leaf_text,
+  ast_type_question_nullable,
+  ast_type_parenthesis_tensor,
+  ast_type_bracket_tuple,
+  ast_type_arrow_callable,
+  ast_type_vertical_bar_union,
+  ast_type_triangle_args,
   // expressions
   ast_empty_expression,
   ast_parenthesized_expression,
+  ast_braced_expression,
+  ast_artificial_aux_vertex,
   ast_tensor,
-  ast_typed_tuple,
+  ast_bracket_tuple,
   ast_reference,
   ast_local_var_lhs,
   ast_local_vars_declaration,
@@ -88,9 +96,16 @@ enum ASTNodeType {
   ast_binary_operator,
   ast_ternary_operator,
   ast_cast_as_operator,
+  ast_is_type_operator,
+  ast_not_null_operator,
+  ast_match_expression,
+  ast_match_arm,
+  ast_object_field,
+  ast_object_body,
+  ast_object_literal,
   // statements
   ast_empty_statement,
-  ast_sequence,
+  ast_block_statement,
   ast_return_statement,
   ast_if_statement,
   ast_repeat_statement,
@@ -111,6 +126,10 @@ enum ASTNodeType {
   ast_function_declaration,
   ast_global_var_declaration,
   ast_constant_declaration,
+  ast_type_alias_declaration,
+  ast_struct_field,
+  ast_struct_body,
+  ast_struct_declaration,
   ast_tolk_required_version,
   ast_import_directive,
   ast_tolk_file,
@@ -125,19 +144,29 @@ enum class AnnotationKind {
   unknown,
 };
 
-template<ASTNodeType node_type>
+enum class MatchArmKind {    // for `match` expression, each of arms `pattern => body` can be:
+  const_expression,          // `-1 => body` / `SOME_CONST + ton("0.05") => body` (any expr at parsing, resulting in const)
+  exact_type,                // `int => body` / `User | slice => body`
+  else_branch,               // `else => body`
+};
+
+struct ASTAuxData {          // base class for data in ast_artificial_aux_vertex, see ast-aux-data.h
+  virtual ~ASTAuxData() = default;
+};
+
+template<ASTNodeKind node_kind>
 struct Vertex;
 
-template<ASTNodeType node_type>
-using V = const Vertex<node_type>*;
+template<ASTNodeKind node_kind>
+using V = const Vertex<node_kind>*;
 
 #define createV new Vertex
 
-struct UnexpectedASTNodeType final : std::exception {
+struct UnexpectedASTNodeKind final : std::exception {
   AnyV v_unexpected;
   std::string message;
 
-  explicit UnexpectedASTNodeType(AnyV v_unexpected, const char* place_where);
+  explicit UnexpectedASTNodeKind(AnyV v_unexpected, const char* place_where);
 
   const char* what() const noexcept override {
     return message.c_str();
@@ -147,25 +176,25 @@ struct UnexpectedASTNodeType final : std::exception {
 // ---------------------------------------------------------
 
 struct ASTNodeBase {
-  const ASTNodeType type;
+  const ASTNodeKind kind;
   const SrcLocation loc;
 
-  ASTNodeBase(ASTNodeType type, SrcLocation loc) : type(type), loc(loc) {}
+  ASTNodeBase(ASTNodeKind kind, SrcLocation loc) : kind(kind), loc(loc) {}
   ASTNodeBase(const ASTNodeBase&) = delete;
 
-  template<ASTNodeType node_type>
-  V<node_type> as() const {
+  template<ASTNodeKind node_kind>
+  V<node_kind> as() const {
 #ifdef TOLK_DEBUG
-    if (type != node_type) {
-      throw Fatal("v->as<...> to wrong node_type");
+    if (kind != node_kind) {
+      throw Fatal("v->as<...> to wrong node_kind");
     }
 #endif
-    return static_cast<V<node_type>>(this);
+    return static_cast<V<node_kind>>(this);
   }
 
-  template<ASTNodeType node_type>
-  V<node_type> try_as() const {
-    return type == node_type ? static_cast<V<node_type>>(this) : nullptr;
+  template<ASTNodeKind node_kind>
+  V<node_kind> try_as() const {
+    return kind == node_kind ? static_cast<V<node_kind>>(this) : nullptr;
   }
 
 #ifdef TOLK_DEBUG
@@ -178,23 +207,49 @@ struct ASTNodeBase {
   void error(const std::string& err_msg) const;
 };
 
-struct ASTNodeExpressionBase : ASTNodeBase {
-  friend class ASTDuplicatorFunction;
+struct ASTNodeDeclaredTypeBase : ASTNodeBase {
+  TypePtr resolved_type = nullptr;
 
+  ASTNodeDeclaredTypeBase* mutate() const { return const_cast<ASTNodeDeclaredTypeBase*>(this); }
+  void assign_resolved_type(TypePtr resolved_type);
+
+  ASTNodeDeclaredTypeBase(ASTNodeKind kind, SrcLocation loc) : ASTNodeBase(kind, loc) {}
+};
+
+struct ASTNodeExpressionBase : ASTNodeBase {
   TypePtr inferred_type = nullptr;
   bool is_rvalue: 1 = false;
   bool is_lvalue: 1 = false;
+  bool is_always_true: 1 = false;     // inside `if`, `while`, ternary condition, `== null`, etc.
+  bool is_always_false: 1 = false;    // (when expression is guaranteed to be always true or always false)
 
   ASTNodeExpressionBase* mutate() const { return const_cast<ASTNodeExpressionBase*>(this); }
   void assign_inferred_type(TypePtr type);
   void assign_rvalue_true();
   void assign_lvalue_true();
+  void assign_always_true_or_false(int flow_true_false_state);
 
-  ASTNodeExpressionBase(ASTNodeType type, SrcLocation loc) : ASTNodeBase(type, loc) {}
+  ASTNodeExpressionBase(ASTNodeKind kind, SrcLocation loc) : ASTNodeBase(kind, loc) {}
 };
 
 struct ASTNodeStatementBase : ASTNodeBase {
-  ASTNodeStatementBase(ASTNodeType type, SrcLocation loc) : ASTNodeBase(type, loc) {}
+  ASTNodeStatementBase(ASTNodeKind kind, SrcLocation loc) : ASTNodeBase(kind, loc) {}
+};
+
+struct ASTTypeLeaf : ASTNodeDeclaredTypeBase {
+protected:
+  ASTTypeLeaf(ASTNodeKind kind, SrcLocation loc)
+    : ASTNodeDeclaredTypeBase(kind, loc) {}
+};
+
+struct ASTTypeVararg : ASTNodeDeclaredTypeBase {
+  friend class ASTVisitor;
+
+protected:
+  std::vector<AnyTypeV> children;
+
+  ASTTypeVararg(ASTNodeKind kind, SrcLocation loc, std::vector<AnyTypeV>&& children)
+    : ASTNodeDeclaredTypeBase(kind, loc), children(std::move(children)) {}
 };
 
 struct ASTExprLeaf : ASTNodeExpressionBase {
@@ -202,8 +257,8 @@ struct ASTExprLeaf : ASTNodeExpressionBase {
   friend class ASTReplacer;
 
 protected:
-  ASTExprLeaf(ASTNodeType type, SrcLocation loc)
-    : ASTNodeExpressionBase(type, loc) {}
+  ASTExprLeaf(ASTNodeKind kind, SrcLocation loc)
+    : ASTNodeExpressionBase(kind, loc) {}
 };
 
 struct ASTExprUnary : ASTNodeExpressionBase {
@@ -213,8 +268,8 @@ struct ASTExprUnary : ASTNodeExpressionBase {
 protected:
   AnyExprV child;
 
-  ASTExprUnary(ASTNodeType type, SrcLocation loc, AnyExprV child)
-    : ASTNodeExpressionBase(type, loc), child(child) {}
+  ASTExprUnary(ASTNodeKind kind, SrcLocation loc, AnyExprV child)
+    : ASTNodeExpressionBase(kind, loc), child(child) {}
 };
 
 struct ASTExprBinary : ASTNodeExpressionBase {
@@ -225,8 +280,8 @@ protected:
   AnyExprV lhs;
   AnyExprV rhs;
 
-  ASTExprBinary(ASTNodeType type, SrcLocation loc, AnyExprV lhs, AnyExprV rhs)
-    : ASTNodeExpressionBase(type, loc), lhs(lhs), rhs(rhs) {}
+  ASTExprBinary(ASTNodeKind kind, SrcLocation loc, AnyExprV lhs, AnyExprV rhs)
+    : ASTNodeExpressionBase(kind, loc), lhs(lhs), rhs(rhs) {}
 };
 
 struct ASTExprVararg : ASTNodeExpressionBase {
@@ -238,12 +293,23 @@ protected:
 
   AnyExprV child(int i) const { return children.at(i); }
 
-  ASTExprVararg(ASTNodeType type, SrcLocation loc, std::vector<AnyExprV> children)
-    : ASTNodeExpressionBase(type, loc), children(std::move(children)) {}
+  ASTExprVararg(ASTNodeKind kind, SrcLocation loc, std::vector<AnyExprV>&& children)
+    : ASTNodeExpressionBase(kind, loc), children(std::move(children)) {}
 
 public:
   int size() const { return static_cast<int>(children.size()); }
   bool empty() const { return children.empty(); }
+};
+
+struct ASTExprBlockOfStatements : ASTNodeExpressionBase {
+  friend class ASTVisitor;
+  friend class ASTReplacer;
+
+protected:
+  AnyV child_block_statement;
+
+  ASTExprBlockOfStatements(ASTNodeKind kind, SrcLocation loc, AnyV child_block_statement)
+    : ASTNodeExpressionBase(kind, loc), child_block_statement(child_block_statement) {}
 };
 
 struct ASTStatementUnary : ASTNodeStatementBase {
@@ -255,8 +321,8 @@ protected:
 
   AnyExprV child_as_expr() const { return reinterpret_cast<AnyExprV>(child); }
 
-  ASTStatementUnary(ASTNodeType type, SrcLocation loc, AnyV child)
-    : ASTNodeStatementBase(type, loc), child(child) {}
+  ASTStatementUnary(ASTNodeKind kind, SrcLocation loc, AnyV child)
+    : ASTNodeStatementBase(kind, loc), child(child) {}
 };
 
 struct ASTStatementVararg : ASTNodeStatementBase {
@@ -268,8 +334,8 @@ protected:
 
   AnyExprV child_as_expr(int i) const { return reinterpret_cast<AnyExprV>(children.at(i)); }
 
-  ASTStatementVararg(ASTNodeType type, SrcLocation loc, std::vector<AnyV> children)
-    : ASTNodeStatementBase(type, loc), children(std::move(children)) {}
+  ASTStatementVararg(ASTNodeKind kind, SrcLocation loc, std::vector<AnyV>&& children)
+    : ASTNodeStatementBase(kind, loc), children(std::move(children)) {}
 
 public:
   int size() const { return static_cast<int>(children.size()); }
@@ -281,8 +347,8 @@ struct ASTOtherLeaf : ASTNodeBase {
   friend class ASTReplacer;
 
 protected:
-  ASTOtherLeaf(ASTNodeType type, SrcLocation loc)
-    : ASTNodeBase(type, loc) {}
+  ASTOtherLeaf(ASTNodeKind kind, SrcLocation loc)
+    : ASTNodeBase(kind, loc) {}
 };
 
 struct ASTOtherVararg : ASTNodeBase {
@@ -294,8 +360,8 @@ protected:
 
   AnyExprV child_as_expr(int i) const { return reinterpret_cast<AnyExprV>(children.at(i)); }
 
-  ASTOtherVararg(ASTNodeType type, SrcLocation loc, std::vector<AnyV> children)
-    : ASTNodeBase(type, loc), children(std::move(children)) {}
+  ASTOtherVararg(ASTNodeKind kind, SrcLocation loc, std::vector<AnyV>&& children)
+    : ASTNodeBase(kind, loc), children(std::move(children)) {}
 
 public:
   int size() const { return static_cast<int>(children.size()); }
@@ -317,6 +383,86 @@ struct Vertex<ast_identifier> final : ASTOtherLeaf {
   Vertex(SrcLocation loc, std::string_view name)
     : ASTOtherLeaf(ast_identifier, loc)
     , name(name) {}
+};
+
+
+//
+// ---------------------------------------------------------
+//     types
+//
+
+
+template<>
+// ast_type_leaf_text is a type node without children: "int", "User", "T", etc.
+// after resolving, it will become TypeDataInt / TypeDataStruct / etc.
+struct Vertex<ast_type_leaf_text> final : ASTTypeLeaf {
+  std::string_view text;
+
+  Vertex(SrcLocation loc, std::string_view text)
+    : ASTTypeLeaf(ast_type_leaf_text, loc)
+    , text(text) {}
+};
+
+template<>
+// ast_type_question_nullable is "T?"
+// after resolving, it will become a union "T | null", but at AST level, it's a separate node
+struct Vertex<ast_type_question_nullable> final : ASTTypeVararg {
+  AnyTypeV get_inner() const { return children.at(0); }
+
+  Vertex(SrcLocation loc, AnyTypeV inner)
+    : ASTTypeVararg(ast_type_question_nullable, loc, {inner}) {}
+};
+
+template<>
+// ast_type_parenthesis_tensor is "(T1, T2, ...)"
+// after resolving, it will become TypeDataTensor
+struct Vertex<ast_type_parenthesis_tensor> final : ASTTypeVararg {
+  const std::vector<AnyTypeV>& get_items() const { return children; }
+
+  Vertex(SrcLocation loc, std::vector<AnyTypeV>&& items)
+    : ASTTypeVararg(ast_type_parenthesis_tensor, loc, std::move(items)) {}
+};
+
+template<>
+// ast_type_bracket_tuple is "[T1, T2, ...]"
+// after resolving, it will become TypeDataBrackets
+struct Vertex<ast_type_bracket_tuple> final : ASTTypeVararg {
+  const std::vector<AnyTypeV>& get_items() const { return children; }
+
+  Vertex(SrcLocation loc, std::vector<AnyTypeV>&& items)
+    : ASTTypeVararg(ast_type_bracket_tuple, loc, std::move(items)) {}
+};
+
+template<>
+// ast_type_arrow_callable is "(T1, T2, ...) -> TResult"
+// after resolving, it will become TypeDataFunCallable
+struct Vertex<ast_type_arrow_callable> final : ASTTypeVararg {
+  const std::vector<AnyTypeV>& get_params_and_return() const { return children; }
+
+  Vertex(SrcLocation loc, std::vector<AnyTypeV>&& params_and_return)
+    : ASTTypeVararg(ast_type_arrow_callable, loc, std::move(params_and_return)) {}
+};
+
+template<>
+// ast_type_vertical_bar_union is "T1 | T2 | ..."
+// after resolving, it will become TypeDataUnion
+struct Vertex<ast_type_vertical_bar_union> final : ASTTypeVararg {
+  const std::vector<AnyTypeV>& get_variants() const { return children; }
+
+  Vertex(SrcLocation loc, std::vector<AnyTypeV>&& variants)
+    : ASTTypeVararg(ast_type_vertical_bar_union, loc, std::move(variants)) {}
+};
+
+
+template<>
+// ast_type_triangle_args is "T1<T2, T3, ...>"
+// example: `type OkInt = Ok<int>`, then "Ok<int>" is triangle args, and at resolving, it's instantiated into TypeDataStruct
+// example: `type A<T> = Ok<T>`, then "Ok<T>" is triangle args, but at resolving, kept as TypeDataGenericTypeWithTs
+struct Vertex<ast_type_triangle_args> final : ASTTypeVararg {
+  const std::vector<AnyTypeV>& get_inner_and_args() const { return children; }
+
+  Vertex(SrcLocation loc, std::vector<AnyTypeV>&& inner_and_args)
+    : ASTTypeVararg(ast_type_triangle_args, loc, std::move(inner_and_args)) {}
 };
 
 
@@ -346,6 +492,33 @@ struct Vertex<ast_parenthesized_expression> final : ASTExprUnary {
 };
 
 template<>
+// ast_braced_expression is a sequence, but in a context of expression (it has a type)
+// it can contain arbitrary statements inside
+// it can occur only in special places within the input code, not anywhere
+// example: `match (intV) { 0 => { ... } }` rhs of 0 is braced expression
+struct Vertex<ast_braced_expression> final : ASTExprBlockOfStatements {
+  auto get_block_statement() const { return child_block_statement->as<ast_block_statement>(); }
+
+  Vertex(SrcLocation loc, AnyV child_block_statement)
+    : ASTExprBlockOfStatements(ast_braced_expression, loc, child_block_statement) {}
+};
+
+template<>
+// ast_artificial_aux_vertex is a compiler-inserted vertex that can't occur in source code
+// example: special vertex to force location in Fift output at constant usage
+struct Vertex<ast_artificial_aux_vertex> final : ASTExprUnary {
+  const ASTAuxData* aux_data;     // custom payload, see ast-aux-data.h
+
+  AnyExprV get_wrapped_expr() const { return child; }
+
+  Vertex(SrcLocation loc, AnyExprV wrapped_expr, const ASTAuxData* aux_data, TypePtr inferred_type)
+    : ASTExprUnary(ast_artificial_aux_vertex, loc, wrapped_expr)
+    , aux_data(aux_data) {
+    assign_inferred_type(inferred_type);
+  }
+};
+
+template<>
 // ast_tensor is a set of expressions embraced by (parenthesis)
 // in most languages, it's called "tuple", but in TVM, "tuple" is a TVM primitive, that's why "tensor"
 // example: `(1, 2)`, `(1, (2, 3))` (nested), `()` (empty tensor)
@@ -360,16 +533,16 @@ struct Vertex<ast_tensor> final : ASTExprVararg {
 };
 
 template<>
-// ast_typed_tuple is a set of expressions in [square brackets]
+// ast_bracket_tuple is a set of expressions in [square brackets]
 // in TVM, it's a TVM tuple, that occupies 1 slot, but the compiler knows its "typed structure"
 // example: `[1, x]`, `[[0]]` (nested)
 // typed tuples can be assigned to N variables, like `[one, _, three] = [1,2,3]`
-struct Vertex<ast_typed_tuple> final : ASTExprVararg {
+struct Vertex<ast_bracket_tuple> final : ASTExprVararg {
   const std::vector<AnyExprV>& get_items() const { return children; }
   AnyExprV get_item(int i) const { return child(i); }
 
   Vertex(SrcLocation loc, std::vector<AnyExprV> items)
-    : ASTExprVararg(ast_typed_tuple, loc, std::move(items)) {}
+    : ASTExprVararg(ast_bracket_tuple, loc, std::move(items)) {}
 };
 
 template<>
@@ -408,8 +581,8 @@ private:
   V<ast_identifier> identifier;
 
 public:
-  const LocalVarData* var_ref = nullptr;  // filled on resolve identifiers; for `redef` points to declared above; for underscore, name is empty
-  TypePtr declared_type;            // not null for `var x: int = rhs`, otherwise nullptr
+  LocalVarPtr var_ref = nullptr;    // filled on resolve identifiers; for `redef` points to declared above; for underscore, name is empty
+  AnyTypeV type_node;               // exists for `var x: int = rhs`, otherwise nullptr
   bool is_immutable;                // declared via 'val', not 'var'
   bool marked_as_redef;             // var (existing_var redef, new_var: int) = ...
 
@@ -417,12 +590,11 @@ public:
   std::string_view get_name() const { return identifier->name; }     // empty for underscore
 
   Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_var_ref(const LocalVarData* var_ref);
-  void assign_resolved_type(TypePtr declared_type);
+  void assign_var_ref(LocalVarPtr var_ref);
 
-  Vertex(SrcLocation loc, V<ast_identifier> identifier, TypePtr declared_type, bool is_immutable, bool marked_as_redef)
+  Vertex(SrcLocation loc, V<ast_identifier> identifier, AnyTypeV type_node, bool is_immutable, bool marked_as_redef)
     : ASTExprLeaf(ast_local_var_lhs, loc)
-    , identifier(identifier), declared_type(declared_type), is_immutable(is_immutable), marked_as_redef(marked_as_redef) {}
+    , identifier(identifier), type_node(type_node), is_immutable(is_immutable), marked_as_redef(marked_as_redef) {}
 };
 
 template<>
@@ -431,7 +603,7 @@ template<>
 // for `var (x, [y])` its expr is "tensor (local var, typed tuple (local var))"
 // for assignment `var x = 5`, this node is `var x`, lhs of assignment
 struct Vertex<ast_local_vars_declaration> final : ASTExprUnary {
-  AnyExprV get_expr() const { return child; } // ast_local_var_lhs / ast_tensor / ast_typed_tuple
+  AnyExprV get_expr() const { return child; } // ast_local_var_lhs / ast_tensor / ast_bracket_tuple
 
   Vertex(SrcLocation loc, AnyExprV expr)
     : ASTExprUnary(ast_local_vars_declaration, loc, expr) {}
@@ -453,25 +625,18 @@ struct Vertex<ast_int_const> final : ASTExprLeaf {
 
 template<>
 // ast_string_const is a string literal in double quotes or """ when multiline
-// examples: "asdf" / "Ef8zMz..."a / "to_calc_crc32_from"c
-// an optional modifier specifies how a string is parsed (probably, like an integer)
+// examples: "asdf" / "LTIME" (in asm body) / stringCrc32("asdf") (as an argument)
 // note, that TVM doesn't have strings, it has only slices, so "hello" has type slice
 struct Vertex<ast_string_const> final : ASTExprLeaf {
   std::string_view str_val;
-  char modifier;
+  std::string literal_value;      // when "some_str" is a standalone string, value of type `slice`, for x{...} Fift output
 
-  bool is_bitslice() const {
-    char m = modifier;
-    return m == 0 || m == 's' || m == 'a';
-  }
-  bool is_intval() const {
-    char m = modifier;
-    return m == 'u' || m == 'h' || m == 'H' || m == 'c';
-  }
+  Vertex* mutate() const { return const_cast<Vertex*>(this); }
+  void assign_literal_value(std::string&& literal_value);
 
-  Vertex(SrcLocation loc, std::string_view str_val, char modifier)
+  Vertex(SrcLocation loc, std::string_view str_val)
     : ASTExprLeaf(ast_string_const, loc)
-    , str_val(str_val), modifier(modifier) {}
+    , str_val(str_val) {}
 };
 
 template<>
@@ -519,7 +684,7 @@ struct Vertex<ast_argument_list> final : ASTExprVararg {
 
 template<>
 // ast_dot_access is "object before dot, identifier + optional <T> after dot"
-// examples: `tensorVar.0` / `obj.field` / `getObj().method` / `t.tupleFirst<int>`
+// examples: `tensorVar.0` / `obj.field` / `getObj().method` / `t.tupleFirst<int>` / `Point.create`
 // from traversing point of view, it's an unary expression: only obj is expression, field name is not
 // note, that `obj.method()` is a function call with "dot access `obj.method`" callee
 struct Vertex<ast_dot_access> final : ASTExprUnary {
@@ -530,12 +695,14 @@ private:
 public:
 
   typedef std::variant<
-    const FunctionData*,         // for `t.tupleAt` target is `tupleAt` global function
+    FunctionPtr,                 // for `t.tupleAt` target is `tupleAt` global function
+    StructFieldPtr,              // for `user.id` target is field `id` of struct `User`
     int                          // for `t.0` target is "indexed access" 0
   > DotTarget;
-  DotTarget target = static_cast<FunctionData*>(nullptr); // filled at type inferring
+  DotTarget target = static_cast<FunctionPtr>(nullptr); // filled at type inferring
 
-  bool is_target_fun_ref() const { return std::holds_alternative<const FunctionData*>(target); }
+  bool is_target_fun_ref() const { return std::holds_alternative<FunctionPtr>(target); }
+  bool is_target_struct_field() const { return std::holds_alternative<StructFieldPtr>(target); }
   bool is_target_indexed_access() const { return std::holds_alternative<int>(target); }
 
   AnyExprV get_obj() const { return child; }
@@ -558,19 +725,20 @@ template<>
 // example: `globalF<int>()` then callee is reference (with instantiation Ts filled)
 // example: `local_var()` then callee is reference (points to local var, filled at resolve identifiers)
 // example: `getF()()` then callee is another func call (which type is TypeDataFunCallable)
-// example: `obj.method()` then callee is dot access (resolved while type inferring)
+// example: `obj.method()` then callee is dot access, self_obj = obj
+// example: `Point.create()` then callee is dot access, self_obj = nullptr
 struct Vertex<ast_function_call> final : ASTExprBinary {
-  const FunctionData* fun_maybe = nullptr;  // filled while type inferring for `globalF()` / `obj.f()`; remains nullptr for `local_var()` / `getF()()`
+  FunctionPtr fun_maybe = nullptr;  // filled while type inferring for `globalF()` / `obj.f()`; remains nullptr for `local_var()` / `getF()()`
+  bool dot_obj_is_self = false;     // true for `obj.method()` (obj will be `self` in method); false for `globalF()` / `Point.create()`
 
   AnyExprV get_callee() const { return lhs; }
-  bool is_dot_call() const { return lhs->type == ast_dot_access; }
-  AnyExprV get_dot_obj() const { return lhs->as<ast_dot_access>()->get_obj(); }
+  AnyExprV get_self_obj() const { return dot_obj_is_self ? lhs->as<ast_dot_access>()->get_obj() : nullptr; }
   auto get_arg_list() const { return rhs->as<ast_argument_list>(); }
   int get_num_args() const { return rhs->as<ast_argument_list>()->size(); }
   auto get_arg(int i) const { return rhs->as<ast_argument_list>()->get_arg(i); }
 
   Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_fun_ref(const FunctionData* fun_ref);
+  void assign_fun_ref(FunctionPtr fun_ref, bool dot_obj_is_self);
 
   Vertex(SrcLocation loc, AnyExprV lhs_f, V<ast_argument_list> arguments)
     : ASTExprBinary(ast_function_call, loc, lhs_f, arguments) {}
@@ -603,7 +771,7 @@ template<>
 // ast_set_assign represents assignment-and-set operation "lhs <op>= rhs"
 // examples: `a += 4` / `b <<= c`
 struct Vertex<ast_set_assign> final : ASTExprBinary {
-  const FunctionData* fun_ref = nullptr;      // filled at type inferring, points to `_+_` built-in for +=
+  FunctionPtr fun_ref = nullptr;              // filled at type inferring, points to `_+_` built-in for +=
   std::string_view operator_name;             // without equal sign, "+" for operator +=
   TokenType tok;                              // tok_set_*
 
@@ -611,7 +779,7 @@ struct Vertex<ast_set_assign> final : ASTExprBinary {
   AnyExprV get_rhs() const { return rhs; }
 
   Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_fun_ref(const FunctionData* fun_ref);
+  void assign_fun_ref(FunctionPtr fun_ref);
 
   Vertex(SrcLocation loc, std::string_view operator_name, TokenType tok, AnyExprV lhs, AnyExprV rhs)
     : ASTExprBinary(ast_set_assign, loc, lhs, rhs)
@@ -622,14 +790,14 @@ template<>
 // ast_unary_operator is "some operator over one expression"
 // examples: `-1` / `~found`
 struct Vertex<ast_unary_operator> final : ASTExprUnary {
-  const FunctionData* fun_ref = nullptr;      // filled at type inferring, points to some built-in function
+  FunctionPtr fun_ref = nullptr;          // filled at type inferring, points to some built-in function
   std::string_view operator_name;
   TokenType tok;
 
   AnyExprV get_rhs() const { return child; }
 
   Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_fun_ref(const FunctionData* fun_ref);
+  void assign_fun_ref(FunctionPtr fun_ref);
 
   Vertex(SrcLocation loc, std::string_view operator_name, TokenType tok, AnyExprV rhs)
     : ASTExprUnary(ast_unary_operator, loc, rhs)
@@ -641,7 +809,7 @@ template<>
 // examples: `a + b` / `x & true` / `(a, b) << g()`
 // note, that `a = b` is NOT a binary operator, it's ast_assign, also `a += b`, it's ast_set_assign
 struct Vertex<ast_binary_operator> final : ASTExprBinary {
-  const FunctionData* fun_ref = nullptr;      // filled at type inferring, points to some built-in function
+  FunctionPtr fun_ref = nullptr;          // filled at type inferring, points to some built-in function
   std::string_view operator_name;
   TokenType tok;
 
@@ -649,7 +817,7 @@ struct Vertex<ast_binary_operator> final : ASTExprBinary {
   AnyExprV get_rhs() const { return rhs; }
 
   Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_fun_ref(const FunctionData* fun_ref);
+  void assign_fun_ref(FunctionPtr fun_ref);
 
   Vertex(SrcLocation loc, std::string_view operator_name, TokenType tok, AnyExprV lhs, AnyExprV rhs)
     : ASTExprBinary(ast_binary_operator, loc, lhs, rhs)
@@ -672,16 +840,130 @@ template<>
 // ast_cast_as_operator is explicit casting with "as" keyword
 // examples: `arg as int` / `null as cell` / `t.tupleAt(2) as slice`
 struct Vertex<ast_cast_as_operator> final : ASTExprUnary {
+  AnyTypeV type_node;
+
   AnyExprV get_expr() const { return child; }
 
-  TypePtr cast_to_type;
+  Vertex(SrcLocation loc, AnyExprV expr, AnyTypeV type_node)
+    : ASTExprUnary(ast_cast_as_operator, loc, expr)
+    , type_node(type_node) {}
+};
+
+template<>
+// ast_is_type_operator is type matching with "is" or "!is" keywords and "== null" / "!= null" (same as "is null")
+// examples: `v is SomeStruct` / `getF() !is slice` / `v == null` / `v !is null`
+struct Vertex<ast_is_type_operator> final : ASTExprUnary {
+  AnyExprV get_expr() const { return child; }
+
+  AnyTypeV type_node;
+  bool is_negated;                // `!is type`, `!= null`
 
   Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_resolved_type(TypePtr cast_to_type);
+  void assign_is_negated(bool is_negated);
 
-  Vertex(SrcLocation loc, AnyExprV expr, TypePtr cast_to_type)
-    : ASTExprUnary(ast_cast_as_operator, loc, expr)
-    , cast_to_type(cast_to_type) {}
+  Vertex(SrcLocation loc, AnyExprV expr, AnyTypeV type_node, bool is_negated)
+    : ASTExprUnary(ast_is_type_operator, loc, expr)
+    , type_node(type_node), is_negated(is_negated) {}
+};
+
+template<>
+// ast_not_null_operator is non-null assertion: like TypeScript ! or Kotlin !!
+// examples: `nullableInt!` / `getNullableBuilder()!`
+struct Vertex<ast_not_null_operator> final : ASTExprUnary {
+  AnyExprV get_expr() const { return child; }
+
+  Vertex(SrcLocation loc, AnyExprV expr)
+    : ASTExprUnary(ast_not_null_operator, loc, expr) {}
+};
+
+template<>
+// ast_match_expression is `match (subject) { ... arms ... }`, used either as a statement or as an expression
+// example: `match (intOrSliceVar) { int => 1, slice => 2 }`
+// example: `match (var c = getIntOrSlice()) { int => return 0, slice => throw 123 }`
+struct Vertex<ast_match_expression> final : ASTExprVararg {
+  AnyExprV get_subject() const { return child(0); }
+  int get_arms_count() const { return size() - 1; }
+  auto get_arm(int i) const { return child(i + 1)->as<ast_match_arm>(); }
+  const std::vector<AnyExprV>& get_all_children() const { return children; }
+
+  bool is_statement() const { return !is_rvalue && !is_lvalue; }
+
+  Vertex(SrcLocation loc, std::vector<AnyExprV>&& subject_and_arms)
+    : ASTExprVararg(ast_match_expression, loc, std::move(subject_and_arms)) {}
+};
+
+template<>
+// ast_match_arm is one `pattern => body` inside `match` expression/statement
+// pattern can be a custom expression / a type / `else` (see comments in MatchArmKind)
+// body can be any expression; particularly, braced expression `{ ... }`
+// example: `int => variable`           (match by type, inferred_type of body variable's type)
+// example: `a+b => { ...; return 0; }` (match by expression, inferred_type of body is "never" (unreachable end))
+struct Vertex<ast_match_arm> final : ASTExprBinary {
+  MatchArmKind pattern_kind;
+  AnyTypeV pattern_type_node;   // for MatchArmKind::exact_type; otherwise nullptr
+
+  AnyExprV get_pattern_expr() const { return lhs; }
+  AnyExprV get_body() const { return rhs; }    // remember, it may be V<ast_braced_expression>
+
+  Vertex* mutate() const { return const_cast<Vertex*>(this); }
+  void assign_resolved_pattern(MatchArmKind pattern_kind, AnyExprV pattern_expr);
+
+  Vertex(SrcLocation loc, MatchArmKind pattern_kind, AnyTypeV pattern_type_node, AnyExprV pattern_expr, AnyExprV body)
+    : ASTExprBinary(ast_match_arm, loc, pattern_expr, body)
+    , pattern_kind(pattern_kind), pattern_type_node(pattern_type_node) {}
+};
+
+template<>
+// ast_object_field is one field at object creation
+// example: `Point { x: 2, y: 3 }` is object creation, its body contains 2 fields
+struct Vertex<ast_object_field> final : ASTExprUnary {
+private:
+  V<ast_identifier> identifier;
+
+public:
+  StructFieldPtr field_ref = nullptr;   // assigned at type inferring
+
+  AnyExprV get_init_val() const { return child; }
+  std::string_view get_field_name() const { return identifier->name; }
+  V<ast_identifier> get_field_identifier() const { return identifier; }
+
+  Vertex* mutate() const { return const_cast<Vertex*>(this); }
+  void assign_field_ref(StructFieldPtr field_ref);
+
+  Vertex(SrcLocation loc, V<ast_identifier> name_identifier, AnyExprV init_val)
+    : ASTExprUnary(ast_object_field, loc, init_val)
+    , identifier(name_identifier) {}
+};
+
+template<>
+// ast_object_body is `{ ... }` inside object initialization, it contains fields
+// examples: see below
+struct Vertex<ast_object_body> final : ASTExprVararg {
+  int get_num_fields() const { return size(); }
+  auto get_field(int i) const { return child(i)->as<ast_object_field>(); }
+  std::vector<AnyExprV> get_all_fields() const { return children; }
+
+  Vertex(SrcLocation loc, std::vector<AnyExprV>&& fields)
+    : ASTExprVararg(ast_object_body, loc, std::move(fields)) {}
+};
+
+template<>
+// ast_object_literal is creating an instance of a struct with initial values of fields, like objects in TypeScript
+// example: `Point { ... }`           (object creation has type_node and body)
+// example: `var v: Point = { ... }`  (object creation has only body, struct_ref is determined from the left)
+// example: `Wrapper<int> { ... }`    (also type_node and body, this type_node is resolved as instantiated generic struct)
+struct Vertex<ast_object_literal> final : ASTExprUnary {
+  StructPtr struct_ref = nullptr;       // assigned at type inferring
+  AnyTypeV type_node;                   // not null for `T { ... }`, nullptr for plain `{ ... }`
+
+  auto get_body() const { return child->as<ast_object_body>(); }
+
+  Vertex* mutate() const { return const_cast<Vertex*>(this); }
+  void assign_struct_ref(StructPtr struct_ref);
+
+  Vertex(SrcLocation loc, AnyTypeV type_node, V<ast_object_body> body)
+    : ASTExprUnary(ast_object_literal, loc, body)
+    , type_node(type_node) {}
 };
 
 
@@ -701,17 +983,21 @@ struct Vertex<ast_empty_statement> final : ASTStatementVararg {
 };
 
 template<>
-// ast_sequence is "some sequence of statements"
-// example: function body is a sequence
-// example: do while body is a sequence
-struct Vertex<ast_sequence> final : ASTStatementVararg {
+// ast_block_statement is "{ statement; statement }" (trailing semicolon is optional)
+// example: function body is a block
+// example: do while body is a block
+struct Vertex<ast_block_statement> final : ASTStatementVararg {
   SrcLocation loc_end;
+  AnyV first_unreachable = nullptr;
 
   const std::vector<AnyV>& get_items() const { return children; }
   AnyV get_item(int i) const { return children.at(i); }
 
-  Vertex(SrcLocation loc, SrcLocation loc_end, std::vector<AnyV> items)
-    : ASTStatementVararg(ast_sequence, loc, std::move(items))
+  Vertex* mutate() const { return const_cast<Vertex*>(this); }
+  void assign_first_unreachable(AnyV first_unreachable);
+
+  Vertex(SrcLocation loc, SrcLocation loc_end, std::vector<AnyV>&& items)
+    : ASTStatementVararg(ast_block_statement, loc, std::move(items))
     , loc_end(loc_end) {}
 };
 
@@ -721,7 +1007,7 @@ template<>
 // note, that for `return;` (without a value, meaning "void"), in AST, it's stored as empty expression
 struct Vertex<ast_return_statement> : ASTStatementUnary {
   AnyExprV get_return_value() const { return child_as_expr(); }
-  bool has_return_value() const { return child->type != ast_empty_expression; }
+  bool has_return_value() const { return child->kind != ast_empty_expression; }
 
   Vertex(SrcLocation loc, AnyExprV child)
     : ASTStatementUnary(ast_return_statement, loc, child) {}
@@ -736,10 +1022,10 @@ struct Vertex<ast_if_statement> final : ASTStatementVararg {
   bool is_ifnot;  // if(!cond), to generate more optimal fift code
 
   AnyExprV get_cond() const { return child_as_expr(0); }
-  auto get_if_body() const { return children.at(1)->as<ast_sequence>(); }
-  auto get_else_body() const { return children.at(2)->as<ast_sequence>(); }    // always exists (when else omitted, it's empty)
+  auto get_if_body() const { return children.at(1)->as<ast_block_statement>(); }
+  auto get_else_body() const { return children.at(2)->as<ast_block_statement>(); }    // always exists (when else omitted, it's empty)
 
-  Vertex(SrcLocation loc, bool is_ifnot, AnyExprV cond, V<ast_sequence> if_body, V<ast_sequence> else_body)
+  Vertex(SrcLocation loc, bool is_ifnot, AnyExprV cond, V<ast_block_statement> if_body, V<ast_block_statement> else_body)
     : ASTStatementVararg(ast_if_statement, loc, {cond, if_body, else_body})
     , is_ifnot(is_ifnot) {}
 };
@@ -749,9 +1035,9 @@ template<>
 // example: `repeat (10) { ... }`
 struct Vertex<ast_repeat_statement> final : ASTStatementVararg {
   AnyExprV get_cond() const { return child_as_expr(0); }
-  auto get_body() const { return children.at(1)->as<ast_sequence>(); }
+  auto get_body() const { return children.at(1)->as<ast_block_statement>(); }
 
-  Vertex(SrcLocation loc, AnyExprV cond, V<ast_sequence> body)
+  Vertex(SrcLocation loc, AnyExprV cond, V<ast_block_statement> body)
     : ASTStatementVararg(ast_repeat_statement, loc, {cond, body}) {}
 };
 
@@ -760,9 +1046,9 @@ template<>
 // example: `while (x > 0) { ... }`
 struct Vertex<ast_while_statement> final : ASTStatementVararg {
   AnyExprV get_cond() const { return child_as_expr(0); }
-  auto get_body() const { return children.at(1)->as<ast_sequence>(); }
+  auto get_body() const { return children.at(1)->as<ast_block_statement>(); }
 
-  Vertex(SrcLocation loc, AnyExprV cond, V<ast_sequence> body)
+  Vertex(SrcLocation loc, AnyExprV cond, V<ast_block_statement> body)
     : ASTStatementVararg(ast_while_statement, loc, {cond, body}) {}
 };
 
@@ -770,10 +1056,10 @@ template<>
 // ast_do_while_statement is a standard "do while" loop
 // example: `do { ... } while (x > 0);`
 struct Vertex<ast_do_while_statement> final : ASTStatementVararg {
-  auto get_body() const { return children.at(0)->as<ast_sequence>(); }
+  auto get_body() const { return children.at(0)->as<ast_block_statement>(); }
   AnyExprV get_cond() const { return child_as_expr(1); }
 
-  Vertex(SrcLocation loc, V<ast_sequence> body, AnyExprV cond)
+  Vertex(SrcLocation loc, V<ast_block_statement> body, AnyExprV cond)
     : ASTStatementVararg(ast_do_while_statement, loc, {body, cond}) {}
 };
 
@@ -783,7 +1069,7 @@ template<>
 // when thrown arg is missing, it's stored as empty expression
 struct Vertex<ast_throw_statement> final : ASTStatementVararg {
   AnyExprV get_thrown_code() const { return child_as_expr(0); }
-  bool has_thrown_arg() const { return child_as_expr(1)->type != ast_empty_expression; }
+  bool has_thrown_arg() const { return child_as_expr(1)->kind != ast_empty_expression; }
   AnyExprV get_thrown_arg() const { return child_as_expr(1); }
 
   Vertex(SrcLocation loc, AnyExprV thrown_code, AnyExprV thrown_arg)
@@ -807,11 +1093,11 @@ template<>
 // there are two formal "arguments" of catch: excNo and arg, but both can be omitted
 // when omitted, they are stored as underscores, so len of a catch tensor is always 2
 struct Vertex<ast_try_catch_statement> final : ASTStatementVararg {
-  auto get_try_body() const { return children.at(0)->as<ast_sequence>(); }
+  auto get_try_body() const { return children.at(0)->as<ast_block_statement>(); }
   auto get_catch_expr() const { return children.at(1)->as<ast_tensor>(); }    // (excNo, arg), always len 2
-  auto get_catch_body() const { return children.at(2)->as<ast_sequence>(); }
+  auto get_catch_body() const { return children.at(2)->as<ast_block_statement>(); }
 
-  Vertex(SrcLocation loc, V<ast_sequence> try_body, V<ast_tensor> catch_expr, V<ast_sequence> catch_body)
+  Vertex(SrcLocation loc, V<ast_block_statement> try_body, V<ast_tensor> catch_expr, V<ast_block_statement> catch_body)
     : ASTStatementVararg(ast_try_catch_statement, loc, {try_body, catch_expr, catch_body}) {}
 };
 
@@ -841,12 +1127,14 @@ struct Vertex<ast_asm_body> final : ASTStatementVararg {
 template<>
 // ast_genericsT_item is generics T at declaration
 // example: `fun f<T1, T2>` has a list of 2 generic Ts
+// example: `struct Params<TInit=null>` has 1 generic T with default
 struct Vertex<ast_genericsT_item> final : ASTOtherLeaf {
   std::string_view nameT;
+  AnyTypeV default_type_node;       // exists for `<T = int>`, nullptr otherwise
 
-  Vertex(SrcLocation loc, std::string_view nameT)
+  Vertex(SrcLocation loc, std::string_view nameT, AnyTypeV default_type_node)
     : ASTOtherLeaf(ast_genericsT_item, loc)
-    , nameT(nameT) {}
+    , nameT(nameT), default_type_node(default_type_node) {}
 };
 
 template<>
@@ -867,14 +1155,11 @@ template<>
 // ast_instantiationT_item is manual substitution of generic T used in code, mostly for func calls
 // examples: `g<int>()` / `t.tupleFirst<slice>()` / `f<(int, slice), builder>()`
 struct Vertex<ast_instantiationT_item> final : ASTOtherLeaf {
-  TypePtr substituted_type;
+  AnyTypeV type_node;
 
-  Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_resolved_type(TypePtr substituted_type);
-
-  Vertex(SrcLocation loc, TypePtr substituted_type)
+  Vertex(SrcLocation loc, AnyTypeV type_node)
     : ASTOtherLeaf(ast_instantiationT_item, loc)
-    , substituted_type(substituted_type) {}
+    , type_node(type_node) {}
 };
 
 template<>
@@ -884,7 +1169,7 @@ struct Vertex<ast_instantiationT_list> final : ASTOtherVararg {
   std::vector<AnyV> get_items() const { return children; }
   auto get_item(int i) const { return children.at(i)->as<ast_instantiationT_item>(); }
 
-  Vertex(SrcLocation loc, std::vector<AnyV> instantiationTs)
+  Vertex(SrcLocation loc, std::vector<AnyV>&& instantiationTs)
     : ASTOtherVararg(ast_instantiationT_list, loc, std::move(instantiationTs)) {}
 };
 
@@ -892,20 +1177,15 @@ template<>
 // ast_parameter is a parameter of a function in its declaration
 // example: `fun f(a: int, mutate b: slice)` has 2 parameters
 struct Vertex<ast_parameter> final : ASTOtherLeaf {
-  const LocalVarData* param_ref = nullptr;    // filled on resolve identifiers
   std::string_view param_name;
-  TypePtr declared_type;
+  AnyTypeV type_node;                         // always exists, typing parameters is mandatory
   bool declared_as_mutate;                    // declared as `mutate param_name`
 
   bool is_underscore() const { return param_name.empty(); }
 
-  Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_param_ref(const LocalVarData* param_ref);
-  void assign_resolved_type(TypePtr declared_type);
-
-  Vertex(SrcLocation loc, std::string_view param_name, TypePtr declared_type, bool declared_as_mutate)
+  Vertex(SrcLocation loc, std::string_view param_name, AnyTypeV type_node, bool declared_as_mutate)
     : ASTOtherLeaf(ast_parameter, loc)
-    , param_name(param_name), declared_type(declared_type), declared_as_mutate(declared_as_mutate) {}
+    , param_name(param_name), type_node(type_node), declared_as_mutate(declared_as_mutate) {}
 };
 
 template<>
@@ -946,28 +1226,28 @@ template<>
 // their body is either sequence (regular code function), or `asm`, or `builtin`
 struct Vertex<ast_function_declaration> final : ASTOtherVararg {
   auto get_identifier() const { return children.at(0)->as<ast_identifier>(); }
-  int get_num_params() const { return children.at(1)->as<ast_parameter_list>()->size(); }
+  int get_num_params()  const { return children.at(1)->as<ast_parameter_list>()->size(); }
   auto get_param_list() const { return children.at(1)->as<ast_parameter_list>(); }
   auto get_param(int i) const { return children.at(1)->as<ast_parameter_list>()->get_param(i); }
-  AnyV get_body() const { return children.at(2); }   // ast_sequence / ast_asm_body
+  AnyV get_body() const { return children.at(2); }   // ast_block_statement / ast_asm_body
 
-  const FunctionData* fun_ref = nullptr;  // filled after register
-  TypePtr declared_return_type;           // filled at ast parsing; if unspecified (nullptr), means "auto infer"
+  FunctionPtr fun_ref = nullptr;          // filled after register
+  AnyTypeV receiver_type_node;            // for `fun builder.storeInt`, here is `builder`
+  AnyTypeV return_type_node;              // if unspecified (nullptr), means "auto infer"
   V<ast_genericsT_list> genericsT_list;   // for non-generics it's nullptr
-  td::RefInt256 method_id;                // specified via @method_id annotation
+  td::RefInt256 tvm_method_id;            // specified via @method_id annotation
   int flags;                              // from enum in FunctionData
 
-  bool is_asm_function() const { return children.at(2)->type == ast_asm_body; }
-  bool is_code_function() const { return children.at(2)->type == ast_sequence; }
-  bool is_builtin_function() const { return children.at(2)->type == ast_empty_statement; }
+  bool is_asm_function() const { return children.at(2)->kind == ast_asm_body; }
+  bool is_code_function() const { return children.at(2)->kind == ast_block_statement; }
+  bool is_builtin_function() const { return children.at(2)->kind == ast_empty_statement; }
 
   Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_fun_ref(const FunctionData* fun_ref);
-  void assign_resolved_type(TypePtr declared_return_type);
+  void assign_fun_ref(FunctionPtr fun_ref);
 
-  Vertex(SrcLocation loc, V<ast_identifier> name_identifier, V<ast_parameter_list> parameters, AnyV body, TypePtr declared_return_type, V<ast_genericsT_list> genericsT_list, td::RefInt256 method_id, int flags)
+  Vertex(SrcLocation loc, V<ast_identifier> name_identifier, V<ast_parameter_list> parameters, AnyV body, AnyTypeV receiver_type_node, AnyTypeV return_type_node, V<ast_genericsT_list> genericsT_list, td::RefInt256 tvm_method_id, int flags)
     : ASTOtherVararg(ast_function_declaration, loc, {name_identifier, parameters, body})
-    , declared_return_type(declared_return_type), genericsT_list(genericsT_list), method_id(std::move(method_id)), flags(flags) {}
+    , receiver_type_node(receiver_type_node), return_type_node(return_type_node), genericsT_list(genericsT_list), tvm_method_id(std::move(tvm_method_id)), flags(flags) {}
 };
 
 template<>
@@ -975,37 +1255,100 @@ template<>
 // example: `global g: int;`
 // note, that globals don't have default values, since there is no single "entrypoint" for a contract
 struct Vertex<ast_global_var_declaration> final : ASTOtherVararg {
-  const GlobalVarData* var_ref = nullptr;  // filled after register
-  TypePtr declared_type;                   // filled always, typing globals is mandatory
+  GlobalVarPtr glob_ref = nullptr;        // filled after register
+  AnyTypeV type_node;                     // always exists, typing globals is mandatory
 
   auto get_identifier() const { return children.at(0)->as<ast_identifier>(); }
 
   Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_var_ref(const GlobalVarData* var_ref);
-  void assign_resolved_type(TypePtr declared_type);
+  void assign_glob_ref(GlobalVarPtr glob_ref);
 
-  Vertex(SrcLocation loc, V<ast_identifier> name_identifier, TypePtr declared_type)
+  Vertex(SrcLocation loc, V<ast_identifier> name_identifier, AnyTypeV type_node)
     : ASTOtherVararg(ast_global_var_declaration, loc, {name_identifier})
-    , declared_type(declared_type) {}
+    , type_node(type_node) {}
 };
 
 template<>
 // ast_constant_declaration is declaring a global constant, outside a function
 // example: `const op = 0x123;`
 struct Vertex<ast_constant_declaration> final : ASTOtherVararg {
-  const GlobalConstData* const_ref = nullptr;  // filled after register
-  TypePtr declared_type;                       // not null for `const op: int = ...`
+  GlobalConstPtr const_ref = nullptr;          // filled after register
+  AnyTypeV type_node;                          // exists for `const op: int = rhs`, otherwise nullptr
 
   auto get_identifier() const { return children.at(0)->as<ast_identifier>(); }
   AnyExprV get_init_value() const { return child_as_expr(1); }
 
   Vertex* mutate() const { return const_cast<Vertex*>(this); }
-  void assign_const_ref(const GlobalConstData* const_ref);
-  void assign_resolved_type(TypePtr declared_type);
+  void assign_const_ref(GlobalConstPtr const_ref);
 
-  Vertex(SrcLocation loc, V<ast_identifier> name_identifier, TypePtr declared_type, AnyExprV init_value)
+  Vertex(SrcLocation loc, V<ast_identifier> name_identifier, AnyTypeV type_node, AnyExprV init_value)
     : ASTOtherVararg(ast_constant_declaration, loc, {name_identifier, init_value})
-    , declared_type(declared_type) {}
+    , type_node(type_node) {}
+};
+
+template<>
+// ast_type_alias_declaration is declaring a structural type alias (fully interchangeable with original type)
+// example: `type UserId = int;`
+// see TypeDataAlias in type-system.h
+struct Vertex<ast_type_alias_declaration> final : ASTOtherVararg {
+  AliasDefPtr alias_ref = nullptr;          // filled after register
+  V<ast_genericsT_list> genericsT_list;             // exists for `type Response<TResult>`; otherwise, nullptr
+  AnyTypeV underlying_type_node;                    // at the right of `=`
+
+  auto get_identifier() const { return children.at(0)->as<ast_identifier>(); }
+
+  Vertex* mutate() const { return const_cast<Vertex*>(this); }
+  void assign_alias_ref(AliasDefPtr alias_ref);
+
+  Vertex(SrcLocation loc, V<ast_identifier> name_identifier, V<ast_genericsT_list> genericsT_list, AnyTypeV underlying_type_node)
+    : ASTOtherVararg(ast_type_alias_declaration, loc, {name_identifier})
+    , genericsT_list(genericsT_list), underlying_type_node(underlying_type_node) {}
+};
+
+template<>
+// ast_struct_field is one field at struct declaration
+// example: `struct Point { x: int, y: int }` is struct declaration, its body contains 2 fields
+struct Vertex<ast_struct_field> final : ASTOtherVararg {
+  AnyTypeV type_node;             // always exists, typing struct fields is mandatory
+
+  auto get_identifier() const { return children.at(0)->as<ast_identifier>(); }
+  bool has_default_value() const { return children.at(1)->kind != ast_empty_expression; }
+  auto get_default_value() const { return child_as_expr(1); }
+
+  Vertex(SrcLocation loc, V<ast_identifier> name_identifier, AnyExprV default_value, AnyTypeV type_node)
+    : ASTOtherVararg(ast_struct_field, loc, {name_identifier, default_value})
+    , type_node(type_node) {}
+};
+
+template<>
+// ast_struct_body is `{ ... }` inside struct declaration, it contains fields
+// example: `struct Storage { owner: User; validUntil: int }` its body contains 2 fields
+struct Vertex<ast_struct_body> final : ASTOtherVararg {
+  int get_num_fields() const { return size(); }
+  auto get_field(int i) const { return children.at(i)->as<ast_struct_field>(); }
+  const std::vector<AnyV>& get_all_fields() const { return children; }
+
+  Vertex(SrcLocation loc, std::vector<AnyV>&& fields)
+    : ASTOtherVararg(ast_struct_body, loc, std::move(fields)) {}
+};
+
+template<>
+// ast_struct_declaration is declaring a struct with fields (each having declared_type), like interfaces in TypeScript
+// example: `struct Storage { owner: User; validUntil: int }`
+// currently, Tolk doesn't have "implements" or whatever, so struct declaration contains only body
+struct Vertex<ast_struct_declaration> final : ASTOtherVararg {
+  StructPtr struct_ref = nullptr;       // filled after register
+  V<ast_genericsT_list> genericsT_list;     // exists for `Wrapper<T>`; otherwise, nullptr
+
+  auto get_identifier() const { return children.at(0)->as<ast_identifier>(); }
+  auto get_struct_body() const { return children.at(1)->as<ast_struct_body>(); }
+
+  Vertex* mutate() const { return const_cast<Vertex*>(this); }
+  void assign_struct_ref(StructPtr struct_ref);
+
+  Vertex(SrcLocation loc, V<ast_identifier> name_identifier, V<ast_genericsT_list> genericsT_list, V<ast_struct_body> struct_body)
+    : ASTOtherVararg(ast_struct_declaration, loc, {name_identifier, struct_body})
+    , genericsT_list(genericsT_list) {}
 };
 
 template<>

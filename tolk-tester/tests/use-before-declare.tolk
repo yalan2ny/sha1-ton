@@ -9,7 +9,7 @@ fun main(): int {
 fun my_begin_cell(): builder
 asm "NEWC";
 @pure
-fun my_end_cell(b: builder): cell
+fun builder.my_end_cell(self): cell
 asm "ENDC";
 @pure
 fun my_begin_parse(c: cell): slice
@@ -27,14 +27,21 @@ fun test1(): int {
     var demo_var: int = demo_10;
     var demo_slice: int = demo_20;
     if (demo_var > 0) {
-        var demo_var: tuple = null;
-        var demo_slice: tuple = null;
+        var demo_var: tuple? = null;
+        var demo_slice: tuple? = null;
     }
     return demo_var + demo_slice;
 }
 
+fun test2() {
+    return second;
+}
+
 global demo_slice: slice;
 const demo_20: int = 20;
+
+const second = first + 1;
+const first = 1;
 
 /**
 @testcase | 0 |  | 34
@@ -42,8 +49,14 @@ const demo_20: int = 20;
 @fif_codegen
 """
   test1 PROC:<{
-    //
     30 PUSHINT  // '10
+  }>
+"""
+
+@fif_codegen
+"""
+  test2 PROC:<{
+    2 PUSHINT  // '2
   }>
 """
  */

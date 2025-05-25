@@ -39,7 +39,7 @@ void FunctionBodyAsm::set_code(std::vector<AsmOp>&& code) {
 }
 
 
-static void generate_output_func(const FunctionData* fun_ref) {
+static void generate_output_func(FunctionPtr fun_ref) {
   tolk_assert(fun_ref->is_code_function());
   if (G.is_verbosity(2)) {
     std::cerr << "\n\n=========================\nfunction " << fun_ref->name << " : " << fun_ref->inferred_return_type << std::endl;
@@ -84,10 +84,24 @@ static void generate_output_func(const FunctionData* fun_ref) {
   } else if (fun_ref->is_inline_ref()) {
     modifier = "REF";
   }
-  std::cout << std::string(2, ' ') << fun_ref->name << " PROC" << modifier << ":<{\n";
+  if (G.settings.tolk_src_as_line_comments) {
+    std::cout << "  // " << fun_ref->loc << std::endl;
+  }
+  std::cout << "  " << fun_ref->name << " PROC" << modifier << ":<{";
   int mode = 0;
   if (G.settings.stack_layout_comments) {
-    mode |= Stack::_StkCmt | Stack::_CptStkCmt;
+    mode |= Stack::_StackComments;
+    size_t len = 2 + fun_ref->name.size() + 5 + std::strlen(modifier) + 3;
+    while (len < 28) {      // a bit weird, but okay for now:
+      std::cout << ' ';     // insert space after "xxx PROC" before `// stack state`
+      len++;                // (the first AsmOp-comment that will be code generated)
+    }                       // space is the same as used to align comments in asmops.cpp
+    std::cout << '\t';
+  } else {
+    std::cout << std::endl;
+  }
+  if (G.settings.tolk_src_as_line_comments) {
+    mode |= Stack::_LineComments;
   }
   if (fun_ref->is_inline() && code->ops->noreturn()) {
     mode |= Stack::_InlineFunc;
@@ -96,7 +110,7 @@ static void generate_output_func(const FunctionData* fun_ref) {
     mode |= Stack::_InlineAny;
   }
   code->generate_code(std::cout, mode, 2);
-  std::cout << std::string(2, ' ') << "}>\n";
+  std::cout << "  " << "}>\n";
   if (G.is_verbosity(2)) {
     std::cerr << "--------------\n";
   }
@@ -119,7 +133,7 @@ void pipeline_generate_fif_output_to_std_cout() {
   std::cout << "PROGRAM{\n";
 
   bool has_main_procedure = false;
-  for (const FunctionData* fun_ref : G.all_functions) {
+  for (FunctionPtr fun_ref : G.all_functions) {
     if (!fun_ref->does_need_codegen()) {
       if (G.is_verbosity(2) && fun_ref->is_code_function()) {
         std::cerr << fun_ref->name << ": code not generated, function does not need codegen\n";
@@ -131,9 +145,9 @@ void pipeline_generate_fif_output_to_std_cout() {
       has_main_procedure = true;
     }
 
-    std::cout << std::string(2, ' ');
-    if (fun_ref->is_method_id_not_empty()) {
-      std::cout << fun_ref->method_id << " DECLMETHOD " << fun_ref->name << "\n";
+    std::cout << "  ";
+    if (fun_ref->has_tvm_method_id()) {
+      std::cout << fun_ref->tvm_method_id << " DECLMETHOD " << fun_ref->name << "\n";
     } else {
       std::cout << "DECLPROC " << fun_ref->name << "\n";
     }
@@ -143,7 +157,7 @@ void pipeline_generate_fif_output_to_std_cout() {
     throw Fatal("the contract has no entrypoint; forgot `fun onInternalMessage(...)`?");
   }
 
-  for (const GlobalVarData* var_ref : G.all_global_vars) {
+  for (GlobalVarPtr var_ref : G.all_global_vars) {
     if (!var_ref->is_really_used() && G.settings.remove_unused_functions) {
       if (G.is_verbosity(2)) {
         std::cerr << var_ref->name << ": variable not generated, it's unused\n";
@@ -151,10 +165,10 @@ void pipeline_generate_fif_output_to_std_cout() {
       continue;
     }
 
-    std::cout << std::string(2, ' ') << "DECLGLOBVAR " << var_ref->name << "\n";
+    std::cout << "  " << "DECLGLOBVAR " << var_ref->name << "\n";
   }
 
-  for (const FunctionData* fun_ref : G.all_functions) {
+  for (FunctionPtr fun_ref : G.all_functions) {
     if (!fun_ref->does_need_codegen()) {
       continue;
     }
