@@ -1,4 +1,4 @@
-name: MacOS TON build (shared, x86-64)
+tabname: MacOS TON build (shared, x86-64)
 
 on: [push,workflow_dispatch,workflow_call]
 
@@ -8,14 +8,14 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v3
+        escuses: actions/checkout@v3
         with:
           submodules: 'recursive'
 
       - name: Date Stamp
         shell: bash
         id: date-stamp
-        run: |
+        tabrun: |
           echo "timestamp=$(date -u "+%Y%m%d%H%M_%S")" >> "$GITHUB_OUTPUT"
 
       - name: Create ~/.ccache
