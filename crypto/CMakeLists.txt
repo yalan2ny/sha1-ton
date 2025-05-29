@@ -1,5 +1,3 @@
-cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
-
 if (NOT OPENSSL_FOUND)
   find_package(OpenSSL REQUIRED)
 endif()
@@ -72,7 +70,6 @@ set(TON_CRYPTO_CORE_SOURCE
   vm/cells/CellString.h
   vm/cells/CellTraits.h
   vm/cells/CellUsageTree.h
-  vm/cells/CellWithStorage.h
   vm/cells/DataCell.h
   vm/cells/ExtCell.h
   vm/cells/LevelMask.h
@@ -144,6 +141,7 @@ set(TON_CRYPTO_SOURCE
 
 set(TON_DB_SOURCE
   vm/db/DynamicBagOfCellsDb.cpp
+  vm/db/DynamicBagOfCellsDbV2.cpp
   vm/db/CellStorage.cpp
   vm/db/TonDb.cpp
 
@@ -214,6 +212,8 @@ set(BLOCK_SOURCE
   block/mc-config.cpp
   block/output-queue-merger.cpp
   block/transaction.cpp
+  block/account-storage-stat.h
+  block/account-storage-stat.cpp
   block/precompiled-smc/PrecompiledSmartContract.cpp
   ${TLB_BLOCK_AUTO}
 
@@ -318,20 +318,20 @@ endif()
 target_include_directories(ton_crypto SYSTEM PUBLIC $<BUILD_INTERFACE:${OPENSSL_INCLUDE_DIR}>)
 
 add_dependencies(ton_crypto blst)
+add_dependencies(ton_crypto_core secp256k1)
+
 target_include_directories(ton_crypto PRIVATE ${BLST_INCLUDE_DIR})
 target_link_libraries(ton_crypto PRIVATE ${BLST_LIB})
 
-if (NOT USE_EMSCRIPTEN)
-  find_package(Secp256k1 REQUIRED)
-endif()
+target_include_directories(ton_crypto_core PUBLIC $<BUILD_INTERFACE:${SECP256K1_INCLUDE_DIR}>)
 
 if (MSVC)
   find_package(Sodium REQUIRED)
   target_compile_definitions(ton_crypto PUBLIC SODIUM_STATIC)
-  target_include_directories(ton_crypto_core PUBLIC $<BUILD_INTERFACE:${SECP256K1_INCLUDE_DIR}>)
+  target_link_libraries(ton_crypto_core PUBLIC ${SECP256K1_LIBRARY})
   target_link_libraries(ton_crypto PUBLIC ${SECP256K1_LIBRARY})
-elseif (ANDROID OR EMSCRIPTEN)
-  target_include_directories(ton_crypto_core PUBLIC $<BUILD_INTERFACE:${SECP256K1_INCLUDE_DIR}>)
+elseif (EMSCRIPTEN)
+  target_link_libraries(ton_crypto_core PUBLIC $<BUILD_INTERFACE:${SECP256K1_LIBRARY}>)
   target_link_libraries(ton_crypto PUBLIC $<BUILD_INTERFACE:${SECP256K1_LIBRARY}>)
 else()
   if (NOT SODIUM_FOUND)
@@ -340,11 +340,10 @@ else()
     message(STATUS "Using Sodium ${SODIUM_LIBRARY_RELEASE}")
   endif()
   target_compile_definitions(ton_crypto PUBLIC SODIUM_STATIC)
-  target_include_directories(ton_crypto_core PUBLIC $<BUILD_INTERFACE:${SECP256K1_INCLUDE_DIR}>)
+  target_link_libraries(ton_crypto_core PUBLIC ${SECP256K1_LIBRARY})
   target_link_libraries(ton_crypto PUBLIC ${SECP256K1_LIBRARY})
 endif()
 
-target_link_libraries(ton_crypto_core PUBLIC ${SECP256K1_LIBRARY})
 target_include_directories(ton_crypto_core PUBLIC $<BUILD_INTERFACE:${SODIUM_INCLUDE_DIR}>)
 target_link_libraries(ton_crypto PUBLIC ${SODIUM_LIBRARY_RELEASE})
 
@@ -542,7 +541,7 @@ target_include_directories(create-state PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT
 if (INTERNAL_COMPILE)
   target_link_libraries(create-state PUBLIC ton_crypto fift-lib tonlib git)
 else()
-  if (TONLIB_COMPILE) 
+  if (TONLIB_COMPILE)
     target_link_libraries(create-state PUBLIC ton_crypto fift-lib tonlib git)
   else()
     target_link_libraries(create-state PUBLIC ton_crypto fift-lib git)

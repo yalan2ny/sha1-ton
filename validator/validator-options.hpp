@@ -32,11 +32,9 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   BlockIdExt init_block_id() const override {
     return init_block_id_;
   }
-  bool need_monitor(ShardIdFull shard) const override {
-    return check_shard_(shard, 0, ShardCheckMode::m_monitor);
-  }
-  bool need_validate(ShardIdFull shard, CatchainSeqno cc_seqno) const override {
-    return check_shard_(shard, cc_seqno, ShardCheckMode::m_validate);
+  bool need_monitor(ShardIdFull shard, const td::Ref<MasterchainState>& state) const override {
+    td::uint32 min_split = state->monitor_min_split_depth(shard.workchain);
+    return check_shard_((td::uint32)shard.pfx_len() <= min_split ? shard : shard_prefix(shard, min_split));
   }
   bool allow_blockchain_init() const override {
     return allow_blockchain_init_;
@@ -141,6 +139,12 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   bool get_celldb_in_memory() const override {
     return celldb_in_memory_;
   }
+  bool get_celldb_v2() const override {
+    return celldb_v2_;
+  }
+  bool get_celldb_disable_bloom_filter() const override {
+    return celldb_disable_bloom_filter_;
+  }
   td::optional<double> get_catchain_max_block_delay() const override {
     return catchain_max_block_delay_;
   }
@@ -156,6 +160,9 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   bool get_fast_state_serializer_enabled() const override {
     return fast_state_serializer_enabled_;
   }
+  double get_catchain_broadcast_speed_multiplier() const override {
+    return catchain_broadcast_speed_multipliers_;
+  }
 
   void set_zero_block_id(BlockIdExt block_id) override {
     zero_block_id_ = block_id;
@@ -163,7 +170,7 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   void set_init_block_id(BlockIdExt block_id) override {
     init_block_id_ = block_id;
   }
-  void set_shard_check_function(std::function<bool(ShardIdFull, CatchainSeqno, ShardCheckMode)> check_shard) override {
+  void set_shard_check_function(std::function<bool(ShardIdFull)> check_shard) override {
     check_shard_ = std::move(check_shard);
   }
   void set_allow_blockchain_init(bool value) override {
@@ -236,6 +243,12 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   void set_celldb_in_memory(bool value) override {
     celldb_in_memory_ = value;
   }
+  void set_celldb_v2(bool value) override {
+    celldb_v2_ = value;
+  }
+  void set_celldb_disable_bloom_filter(bool value) override {
+    celldb_disable_bloom_filter_ = value;
+  }
   void set_catchain_max_block_delay(double value) override {
     catchain_max_block_delay_ = value;
   }
@@ -251,17 +264,18 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   void set_fast_state_serializer_enabled(bool value) override {
     fast_state_serializer_enabled_ = value;
   }
+  void set_catchain_broadcast_speed_multiplier(double value) override {
+    catchain_broadcast_speed_multipliers_ = value;
+  }
 
   ValidatorManagerOptionsImpl *make_copy() const override {
     return new ValidatorManagerOptionsImpl(*this);
   }
 
   ValidatorManagerOptionsImpl(BlockIdExt zero_block_id, BlockIdExt init_block_id,
-                              std::function<bool(ShardIdFull, CatchainSeqno, ShardCheckMode)> check_shard,
-                              bool allow_blockchain_init, double sync_blocks_before,
-                              double block_ttl, double state_ttl, double max_mempool_num,
-                              double archive_ttl, double key_proof_ttl,
-                              bool initial_sync_disabled)
+                              std::function<bool(ShardIdFull)> check_shard, bool allow_blockchain_init,
+                              double sync_blocks_before, double block_ttl, double state_ttl, double max_mempool_num,
+                              double archive_ttl, double key_proof_ttl, bool initial_sync_disabled)
       : zero_block_id_(zero_block_id)
       , init_block_id_(init_block_id)
       , check_shard_(std::move(check_shard))
@@ -278,7 +292,7 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
  private:
   BlockIdExt zero_block_id_;
   BlockIdExt init_block_id_;
-  std::function<bool(ShardIdFull, CatchainSeqno, ShardCheckMode)> check_shard_;
+  std::function<bool(ShardIdFull)> check_shard_;
   bool allow_blockchain_init_;
   double sync_blocks_before_;
   double block_ttl_;
@@ -302,10 +316,13 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   bool celldb_direct_io_ = false;
   bool celldb_preload_all_ = false;
   bool celldb_in_memory_ = false;
+  bool celldb_v2_ = false;
+  bool celldb_disable_bloom_filter_ = false;
   td::optional<double> catchain_max_block_delay_, catchain_max_block_delay_slow_;
   bool state_serializer_enabled_ = true;
   td::Ref<CollatorOptions> collator_options_{true};
   bool fast_state_serializer_enabled_ = false;
+  double catchain_broadcast_speed_multipliers_;
 };
 
 }  // namespace validator

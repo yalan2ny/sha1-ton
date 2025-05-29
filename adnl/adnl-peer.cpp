@@ -119,6 +119,7 @@ void AdnlPeerPairImpl::discover() {
 void AdnlPeerPairImpl::receive_packet_checked(AdnlPacket packet) {
   last_received_packet_ = td::Timestamp::now();
   try_reinit_at_ = td::Timestamp::never();
+  drop_addr_list_at_ = td::Timestamp::never();
   request_reverse_ping_after_ = td::Timestamp::in(15.0);
   auto d = Adnl::adnl_start_time();
   if (packet.dst_reinit_date() > d) {
@@ -415,6 +416,9 @@ void AdnlPeerPairImpl::send_packet_continue(AdnlPacket packet, td::actor::ActorI
   if (!try_reinit_at_ && last_received_packet_ < td::Timestamp::in(-5.0)) {
     try_reinit_at_ = td::Timestamp::in(10.0);
   }
+  if (!drop_addr_list_at_ && last_received_packet_ < td::Timestamp::in(-60.0 * 9.0)) {
+    drop_addr_list_at_ = td::Timestamp::in(60.0);
+  }
   packet.run_basic_checks().ensure();
   auto B = serialize_tl_object(packet.tl(), true);
   if (via_channel) {
@@ -594,11 +598,11 @@ void AdnlPeerPairImpl::process_message(const adnlmessage::AdnlMessagePart &messa
   respond_with_nop();
   auto size = message.total_size();
   if (size > huge_packet_max_size()) {
-    VLOG(ADNL_WARNING) << this << ": dropping too big huge message: size=" << size;
+    VLOG(ADNL_INFO) << this << ": dropping too big huge message: size=" << size;
     return;
   }
   if (message.hash().is_zero()) {
-    VLOG(ADNL_WARNING) << this << ": dropping huge message with zero hash";
+    VLOG(ADNL_INFO) << this << ": dropping huge message with zero hash";
     return;
   }
   if (message.hash() != huge_message_hash_) {
@@ -692,6 +696,16 @@ void AdnlPeerPairImpl::reinit(td::int32 date) {
 }
 
 td::Result<std::pair<td::actor::ActorId<AdnlNetworkConnection>, bool>> AdnlPeerPairImpl::get_conn() {
+  if (drop_addr_list_at_ && drop_addr_list_at_.is_in_past()) {
+    drop_addr_list_at_ = td::Timestamp::never();
+    priority_addr_list_ = AdnlAddressList{};
+    priority_conns_.clear();
+    addr_list_ = AdnlAddressList{};
+    conns_.clear();
+    has_reverse_addr_ = false;
+    return td::Status::Error(ErrorCode::notready, "no active connections");
+  }
+
   if (!priority_addr_list_.empty() && priority_addr_list_.expire_at() < td::Clocks::system()) {
     priority_addr_list_ = AdnlAddressList{};
     priority_conns_.clear();
