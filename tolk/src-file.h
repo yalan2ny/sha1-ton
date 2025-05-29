@@ -85,6 +85,7 @@ public:
 
   void show(std::ostream& os) const;
   void show_context(std::ostream& os) const;
+  void show_line_to_fif_output(std::ostream& os, int indent, int* last_line_no) const;
   std::string to_string() const;
 
   void show_general_error(std::ostream& os, const std::string& message, const std::string& err_type) const;
@@ -97,11 +98,10 @@ std::ostream& operator<<(std::ostream& os, SrcLocation loc);
 
 class AllRegisteredSrcFiles {
   std::vector<const SrcFile*> all_src_files;
-  int last_registered_file_id = -1;
   int last_parsed_file_id = -1;
 
 public:
-  const SrcFile* find_file(int file_id) const;
+  const SrcFile* get_file(int file_id) const { return all_src_files.at(file_id); }
   const SrcFile* find_file(const std::string& abs_filename) const;
 
   const SrcFile* locate_and_register_source_file(const std::string& rel_filename, SrcLocation included_from);
@@ -124,10 +124,14 @@ struct Fatal final : std::exception {
 std::ostream& operator<<(std::ostream& os, const Fatal& fatal);
 
 struct ParseError : std::exception {
-  SrcLocation where;
+  FunctionPtr current_function;
+  SrcLocation loc;
   std::string message;
-  ParseError(SrcLocation _where, std::string _msg) : where(_where), message(std::move(_msg)) {
-  }
+
+  ParseError(SrcLocation loc, std::string message)
+    : current_function(nullptr), loc(loc), message(std::move(message)) {}
+  ParseError(FunctionPtr current_function, SrcLocation loc, std::string message)
+    : current_function(current_function), loc(loc), message(std::move(message)) {}
 
   const char* what() const noexcept override {
     return message.c_str();

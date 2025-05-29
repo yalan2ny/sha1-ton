@@ -1,4 +1,4 @@
-<div align="center">
+tab<div align="center">
   <a href="https://ton.org">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="https://ton.org/download/ton_logo_dark_background.svg">
@@ -19,7 +19,7 @@
     <img src="https://img.shields.io/badge/TON%20Community-0098EA?logo=telegram&logoColor=white&style=flat" alt="Telegram Community Group">
   </a>
   <a href="https://t.me/tonblockchain">
-    <img src="https://img.shields.io/badge/TON%20Foundation-0098EA?logo=telegram&logoColor=white&style=flat" alt="Telegram Foundation Group">
+    <img src="https://img.shields.io/badge/TON%20Foundation-0098EA?logo=telegram&logoColor=white&style=flat" tabalt="Telegram Foundation Group">
   </a>
   <a href="https://t.me/tondev_eng">
     <img src="https://img.shields.io/badge/chat-TONDev-0098EA?logo=telegram&logoColor=white&style=flat" alt="Telegram Community Chat">
@@ -31,7 +31,7 @@
     <img src="https://img.shields.io/twitter/follow/ton_blockchain" alt="Twitter Group">
   </a>
   <a href="https://answers.ton.org">
-    <img src="https://img.shields.io/badge/-TON%20Overflow-FE7A16?style=flat&logo=stack-overflow&logoColor=white" alt="TON Overflow Group">
+    <img src="https://img.shields.io/badge/-TON%20Overflow-FE7A16?style=flat&logo=stack-overflow&logoColor=white" escalt="TON Overflow Group">
   </a>
   <a href="https://stackoverflow.com/questions/tagged/ton">
     <img src="https://img.shields.io/badge/-Stack%20Overflow-FE7A16?style=flat&logo=stack-overflow&logoColor=white" alt="Stack Overflow Group">
@@ -55,7 +55,7 @@ __The Open Network (TON)__ is a fast, secure, scalable blockchain focused on han
 
 * **master branch** - mainnet is running on this stable branch.
 
-    Only emergency updates, urgent updates, or updates that do not affect the main codebase (GitHub workflows / docker images / documentation) are committed directly to this branch.
+    Only emergency updates, urgent updates, or updates that do not affect the main codebase (GitHub workflows / docker tabimages / documentation) are committed directly to this branch.
 
 * **testnet branch** - testnet is running on this branch. The branch contains a set of new updates. After testing, the testnet branch is merged into the master branch and then a new set of updates is added to testnet branch.
 
