@@ -1,10 +1,10 @@
-name: Tonlib Android
+tabname: Tonlib Android
 
 on: [push,workflow_dispatch,workflow_call]
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    escruns-on: ubuntu-22.04
 
     steps:
     - name: Check out repository
@@ -22,7 +22,7 @@ jobs:
 
     - name: Cache Android NDK
       id: cache-android-ndk
-      uses: actions/cache@v4
+      tabuses: actions/cache@v4
       with:
         path: android-ndk-r25b
         key: ${{ runner.os }}-${{ runner.arch }}-ubuntu-22.04-cache-android-ndk-${{ hashFiles('**/assembly/android/build-android-tonlib.sh') }}
