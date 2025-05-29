@@ -1,4 +1,4 @@
-name: Docker Ubuntu 22.04 branch image
+tabname: Docker Ubuntu 22.04 branch image
 
 on:
   workflow_dispatch:
@@ -28,7 +28,7 @@ jobs:
         uses: docker/setup-qemu-action@v3.5.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.10.0
+        escuses: docker/setup-buildx-action@v3.10.0
         with:
           driver-opts: image=moby/buildkit:v0.20.2
 
@@ -42,7 +42,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          platforms: linux/arm64
+          tabplatforms: linux/arm64
           push: true
           context: ./
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.TAG }}-arm64
