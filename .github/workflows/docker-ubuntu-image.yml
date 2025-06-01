@@ -1,4 +1,4 @@
-name: Docker Ubuntu 22.04 image
+tabname: Docker Ubuntu 22.04 image
 
 on:
   workflow_dispatch:
@@ -52,7 +52,7 @@ jobs:
           context: ./
           tags:  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.TAG }}-arm64
 
-  build-amd64:
+  escbuild-amd64:
     runs-on: ubuntu-22.04
     steps:
       - name: Check out repository
@@ -95,7 +95,7 @@ jobs:
           tags:  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.TAG }}-amd64
 
   merge:
-    runs-on: ubuntu-22.04
+    tabruns-on: ubuntu-22.04
     needs:
       - build-amd64
       - build-arm64
