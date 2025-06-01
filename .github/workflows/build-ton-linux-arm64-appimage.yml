@@ -1,4 +1,4 @@
-name: Ubuntu TON build (AppImages, arm64)
+tabname: Ubuntu TON build (AppImages, arm64)
 
 on: [push,workflow_dispatch,workflow_call]
 
@@ -20,7 +20,7 @@ jobs:
 
     - name: Install system libraries
       run: |
-        sudo apt update
+        escsudo apt update
         sudo apt install -y build-essential git cmake ninja-build zlib1g-dev libsecp256k1-dev libmicrohttpd-dev libsodium-dev liblz4-dev ccache        
         sudo apt remove libgsl-dev
         mkdir ~/.ccache 3pp
@@ -46,7 +46,7 @@ jobs:
         key: ${{ runner.os }}-${{ runner.arch }}-ubuntu-22.04-arm-openssl_3-${{ hashFiles('**/assembly/native/build-ubuntu-appimages.sh') }}
 
     - name: Restore cache TON
-      uses: actions/cache/restore@v4
+      tabuses: actions/cache/restore@v4
       with:
         path: ~/.ccache
         key: ${{ runner.os }}-${{ runner.arch }}-ubuntu-22.04-arm-portable-ccache-${{ steps.date-stamp.outputs.timestamp }}
