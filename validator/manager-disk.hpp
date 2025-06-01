@@ -108,8 +108,8 @@ class ValidatorManagerImpl : public ValidatorManager {
   void get_block_data(BlockHandle handle, td::Promise<td::BufferSlice> promise) override;
   void check_zero_state_exists(BlockIdExt block_id, td::Promise<bool> promise) override;
   void get_zero_state(BlockIdExt block_id, td::Promise<td::BufferSlice> promise) override;
-  void check_persistent_state_exists(BlockIdExt block_id, BlockIdExt masterchain_block_id,
-                                     td::Promise<bool> promise) override;
+  void get_persistent_state_size(BlockIdExt block_id, BlockIdExt masterchain_block_id,
+                                 td::Promise<td::uint64> promise) override;
   void get_persistent_state(BlockIdExt block_id, BlockIdExt masterchain_block_id,
                             td::Promise<td::BufferSlice> promise) override;
   void get_persistent_state_slice(BlockIdExt block_id, BlockIdExt masterchain_block_id, td::int64 offset,
@@ -263,11 +263,20 @@ class ValidatorManagerImpl : public ValidatorManager {
   void send_top_shard_block_description(td::Ref<ShardTopBlockDescription> desc) override;
   void send_block_broadcast(BlockBroadcast broadcast, int mode) override {
   }
+  void send_validator_telemetry(PublicKeyHash key, tl_object_ptr<ton_api::validator_telemetry> telemetry) override {
+  }
+  void send_get_out_msg_queue_proof_request(ShardIdFull dst_shard, std::vector<BlockIdExt> blocks,
+                                            block::ImportedMsgQueueLimits limits,
+                                            td::Promise<std::vector<td::Ref<OutMsgQueueProof>>> promise) override {
+    UNREACHABLE();
+  }
+  void send_download_archive_request(BlockSeqno mc_seqno, ShardIdFull shard_prefix, std::string tmp_dir,
+                                     td::Timestamp timeout, td::Promise<std::string> promise) override {
+    UNREACHABLE();
+  }
 
   void update_shard_client_state(BlockIdExt masterchain_block_id, td::Promise<td::Unit> promise) override;
   void get_shard_client_state(bool from_db, td::Promise<BlockIdExt> promise) override;
-  void subscribe_to_shard(ShardIdFull shard) override {
-  }
 
   void update_async_serializer_state(AsyncSerializerState state, td::Promise<td::Unit> promise) override {
     UNREACHABLE();
@@ -279,11 +288,12 @@ class ValidatorManagerImpl : public ValidatorManager {
   void try_get_static_file(FileHash file_hash, td::Promise<td::BufferSlice> promise) override;
 
   void get_download_token(size_t download_size, td::uint32 priority, td::Timestamp timeout,
-                          td::Promise<std::unique_ptr<DownloadToken>> promise) override {
+                          td::Promise<std::unique_ptr<ActionToken>> promise) override {
     promise.set_error(td::Status::Error(ErrorCode::error, "download disabled"));
   }
 
-  void get_archive_id(BlockSeqno masterchain_seqno, td::Promise<td::uint64> promise) override {
+  void get_archive_id(BlockSeqno masterchain_seqno, ShardIdFull shard_prefix,
+                      td::Promise<td::uint64> promise) override {
     UNREACHABLE();
   }
   void get_archive_slice(td::uint64 archive_id, td::uint64 offset, td::uint32 limit,
@@ -331,32 +341,7 @@ class ValidatorManagerImpl : public ValidatorManager {
   void update_gc_block_handle(BlockHandle handle, td::Promise<td::Unit> promise) override {
     promise.set_value(td::Unit());
   }
-  void allow_block_data_gc(BlockIdExt block_id, bool is_archive, td::Promise<bool> promise) override {
-    promise.set_result(false);
-  }
   void allow_block_state_gc(BlockIdExt block_id, td::Promise<bool> promise) override {
-    promise.set_result(false);
-  }
-  void allow_zero_state_file_gc(BlockIdExt block_id, td::Promise<bool> promise) override {
-    promise.set_result(false);
-  }
-  void allow_persistent_state_file_gc(BlockIdExt block_id, BlockIdExt masterchain_block_id,
-                                      td::Promise<bool> promise) override {
-    promise.set_result(false);
-  }
-  void allow_block_signatures_gc(BlockIdExt block_id, td::Promise<bool> promise) override {
-    promise.set_result(false);
-  }
-  void allow_block_proof_gc(BlockIdExt block_id, bool is_archive, td::Promise<bool> promise) override {
-    promise.set_result(false);
-  }
-  void allow_block_proof_link_gc(BlockIdExt block_id, bool is_archive, td::Promise<bool> promise) override {
-    promise.set_result(false);
-  }
-  void allow_block_candidate_gc(BlockIdExt block_id, td::Promise<bool> promise) override {
-    promise.set_result(false);
-  }
-  void allow_block_info_gc(BlockIdExt block_id, td::Promise<bool> promise) override {
     promise.set_result(false);
   }
   void archive(BlockHandle handle, td::Promise<td::Unit> promise) override {
@@ -400,8 +385,8 @@ class ValidatorManagerImpl : public ValidatorManager {
   }
   void get_out_msg_queue_size(BlockIdExt block_id, td::Promise<td::uint64> promise) override {
     if (queue_size_counter_.empty()) {
-      queue_size_counter_ =
-          td::actor::create_actor<QueueSizeCounter>("queuesizecounter", td::Ref<MasterchainState>{}, actor_id(this));
+      queue_size_counter_ = td::actor::create_actor<QueueSizeCounter>("queuesizecounter", td::Ref<MasterchainState>{},
+                                                                      opts_, actor_id(this));
     }
     td::actor::send_closure(queue_size_counter_, &QueueSizeCounter::get_queue_size, block_id, std::move(promise));
   }
@@ -434,6 +419,8 @@ class ValidatorManagerImpl : public ValidatorManager {
       td::optional<ShardIdFull> shard,
       td::Promise<tl_object_ptr<lite_api::liteServer_nonfinal_validatorGroups>> promise) override {
     promise.set_result(td::Status::Error("not implemented"));
+  }
+  void add_persistent_state_description(td::Ref<PersistentStateDescription> desc) override {
   }
 
   void update_options(td::Ref<ValidatorManagerOptions> opts) override {
