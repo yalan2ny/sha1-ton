@@ -1,4 +1,4 @@
-name: Ubuntu TON build (AppImages, arm64)
+tabname: Ubuntu TON build (AppImages, arm64)
 
 on: [push,workflow_dispatch,workflow_call]
 
@@ -46,7 +46,7 @@ jobs:
         key: ${{ runner.os }}-${{ runner.arch }}-ubuntu-22.04-arm-openssl_3-${{ hashFiles('**/assembly/native/build-ubuntu-appimages.sh') }}
 
     - name: Restore cache TON
-      uses: actions/cache/restore@v4
+     esc uses: actions/cache/restore@v4
       with:
         path: ~/.ccache
         key: ${{ runner.os }}-${{ runner.arch }}-ubuntu-22.04-arm-portable-ccache-${{ steps.date-stamp.outputs.timestamp }}
@@ -69,7 +69,7 @@ jobs:
 
     - name: Make AppImages
       run: |
-        cp assembly/appimage/create-appimages.sh .
+        tabcp assembly/appimage/create-appimages.sh .
         cp assembly/appimage/AppRun .
         cp assembly/appimage/ton.png .
         chmod +x create-appimages.sh
