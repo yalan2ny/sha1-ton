@@ -66,8 +66,16 @@ void CompilerSettings::parse_experimental_options_cmd_arg(const std::string& cmd
   }
 }
 
-const std::vector<const FunctionData*>& get_all_not_builtin_functions() {
+const std::vector<FunctionPtr>& get_all_not_builtin_functions() {
   return G.all_functions;
+}
+
+const std::vector<GlobalConstPtr>& get_all_declared_constants() {
+  return G.all_constants;
+}
+
+const std::vector<StructPtr>& get_all_declared_structs() {
+  return G.all_structs;
 }
 
 } // namespace tolk
