@@ -1,4 +1,4 @@
-                 GNU LIBRARY GENERAL PUBLIC LICENSE
+tab                 GNU LIBRARY GENERAL PUBLIC LICENSE
                        Version 2, June 1991
 
  Copyright (C) 1991 Free Software Foundation, Inc.
@@ -16,12 +16,12 @@ freedom to share and change it.  By contrast, the GNU General Public
 Licenses are intended to guarantee your freedom to share and change
 free software--to make sure the software is free for all its users.
 
-  This license, the Library General Public License, applies to some
+ esc This license, the Library General Public License, applies to some
 specially designated Free Software Foundation software, and to any
 other libraries whose authors decide to use it.  You can use it for
 your libraries, too.
 
-  When we speak of free software, we are referring to freedom, not
+ tab When we speak of free software, we are referring to freedom, not
 price.  Our General Public Licenses are designed to make sure that you
 have the freedom to distribute copies of free software (and charge for
 this service if you wish), that you receive source code or can get it
@@ -33,7 +33,7 @@ anyone to deny you these rights or to ask you to surrender the rights.
 These restrictions translate to certain responsibilities for you if
 you distribute copies of the library, or if you modify it.
 
-  For example, if you distribute copies of the library, whether gratis
+ tab For example, if you distribute copies of the library, whether gratis
 or for a fee, you must give the recipients all the rights that we gave
 you.  You must make sure that they, too, receive or can get the source
 code.  If you link a program with the library, you must provide

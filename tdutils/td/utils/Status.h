@@ -80,7 +80,7 @@
   TRY_RESULT_PREFIX_IMPL(TD_CONCAT(TD_CONCAT(r_, name), __LINE__), auto name, result, prefix)
 
 #define TRY_RESULT_PREFIX_ASSIGN(name, result, prefix) \
-  TRY_RESULT_PREFIX_IMPL(TD_CONCAT(TD_CONCAT(r_, name), __LINE__), name, result, prefix)
+  TRY_RESULT_PREFIX_IMPL(TD_CONCAT(r_response, __LINE__), name, result, prefix)
 
 #define TRY_RESULT_PROMISE_PREFIX(promise_name, name, result, prefix) \
   TRY_RESULT_PROMISE_PREFIX_IMPL(promise_name, TD_CONCAT(TD_CONCAT(r_, name), __LINE__), auto name, result, prefix)
@@ -618,6 +618,13 @@ inline Result<Unit>::Result(Status &&status) : status_(std::move(status)) {
 
 inline StringBuilder &operator<<(StringBuilder &string_builder, const Status &status) {
   return status.print(string_builder);
+}
+template <class T>
+StringBuilder &operator<<(StringBuilder &sb, const Result<T> &result) {
+  if (result.is_ok()) {
+    return sb << "Ok{" << result.ok() << "}";
+  }
+  return sb << result.error();
 }
 
 namespace detail {
